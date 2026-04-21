@@ -1,0 +1,9 @@
+transaction_id,account_id,transaction_type,amount,transaction_time,channel,notes
+cb274844-e8bb-4af8-bdd0-3ccdf4e44824,1,deposit,200000.0,2026-04-21 12:14:13,cash,
+11931d83-51e8-48bc-a43b-49ea917187ca,5570,deposit,200000000.0,2026-04-21 12:23:48,atm,
+9c39f9e7-5b56-489b-811e-205adfd237de,acc001,deposit,9500.0,2026-04-21 13:14:12,online,Morning deposit
+8ffce837-d3da-4f46-98c5-4c3bc71c8934,acc001,deposit,9200.0,2026-04-21 12:44:12,online,Afternoon deposit
+b1f0b4a2-3005-4794-a956-6dc273a34df0,acc001,deposit,9800.0,2026-04-21 12:14:12,cash,Evening deposit
+db9e19e8-4f09-4c5c-b105-c6d19ad1a23e,acc002,deposit,5000.0,2026-04-21 11:44:12,branch,Regular deposit
+2358140c-d2e8-4952-9274-2a320793f207,acc003,deposit,8500.0,2026-04-21 11:14:12,wire,Wire transfer
+45b022f8-c80a-4855-94a7-ec89f48adede,acc003,deposit,9000.0,2026-04-21 10:44:12,wire,Wire transfer 2
