@@ -1,3 +1,5 @@
 account_id,txn_date,first_transaction_time,transaction_count,total_amount,avg_amount,transaction_ids,reason,audit_timestamp
 acc001,2026-04-21,2026-04-21 12:14:12,3,28500.0,9500.0,9c39f9e7-5b56-489b-811e-205adfd237de|8ffce837-d3da-4f46-98c5-4c3bc71c8934|b1f0b4a2-3005-4794-a956-6dc273a34df0,"Potential smurfing: repeated sub-$10,000 deposits with daily total >= $10,000",2026-04-21 13:14:12
 acc003,2026-04-21,2026-04-21 10:44:12,2,17500.0,8750.0,2358140c-d2e8-4952-9274-2a320793f207|45b022f8-c80a-4855-94a7-ec89f48adede,"Potential smurfing: repeated sub-$10,000 deposits with daily total >= $10,000",2026-04-21 13:14:12
+acc001,2026-04-21,2026-04-21 12:14:12,3,28500.0,9500.0,9c39f9e7-5b56-489b-811e-205adfd237de|8ffce837-d3da-4f46-98c5-4c3bc71c8934|b1f0b4a2-3005-4794-a956-6dc273a34df0,"Potential smurfing: repeated sub-$10,000 deposits with daily total >= $10,000",2026-04-21 13:37:45
+acc003,2026-04-21,2026-04-21 10:44:12,2,17500.0,8750.0,2358140c-d2e8-4952-9274-2a320793f207|45b022f8-c80a-4855-94a7-ec89f48adede,"Potential smurfing: repeated sub-$10,000 deposits with daily total >= $10,000",2026-04-21 13:37:45
