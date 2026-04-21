@@ -6,7 +6,6 @@ Detects suspicious activity patterns (smurfing) in bank transactions.
 from __future__ import annotations
 
 import csv
-import hashlib
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
@@ -44,14 +43,14 @@ FLAGGED_COLUMNS = [
 
 USER_COLUMNS = [
     "username",
-    "password_hash",
+    "password",
     "role",
     "account_id",
     "is_active",
     "created_at",
 ]
 
-VALID_ROLES = {"admin", "client"}
+VALID_ROLES = {"admin", "client", "customer"}
 
 
 # ============================================================================
@@ -71,10 +70,6 @@ def _ensure_csv(filepath: str, columns: Iterable[str]) -> None:
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=list(columns))
         writer.writeheader()
-
-
-def _hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
 def _coerce_bool(value: object) -> bool:
@@ -364,6 +359,7 @@ def load_users(filepath: str) -> pd.DataFrame:
     users = users[USER_COLUMNS].copy()
     users["username"] = users["username"].astype(str).str.strip().str.lower()
     users["role"] = users["role"].astype(str).str.strip().str.lower()
+    users["role"] = users["role"].replace({"customer": "client"})
     users["account_id"] = users["account_id"].astype(str).str.strip().str.lower()
     users["is_active"] = users["is_active"].apply(_coerce_bool)
 
@@ -397,6 +393,8 @@ def create_user(
     """Create a new user account."""
     user = username.strip().lower()
     user_role = role.strip().lower()
+    if user_role == "customer":
+        user_role = "client"
     user_account = account_id.strip().lower()
 
     if not user:
@@ -416,7 +414,7 @@ def create_user(
         [
             {
                 "username": user,
-                "password_hash": _hash_password(password),
+                "password": password,
                 "role": user_role,
                 "account_id": user_account,
                 "is_active": bool(is_active),
@@ -444,7 +442,7 @@ def authenticate(filepath: str, username: str, password: str) -> tuple[bool, dic
     if not bool(record["is_active"]):
         return False, None, "Account inactive."
 
-    if _hash_password(password) != str(record["password_hash"]):
+    if password != str(record["password"]):
         return False, None, "Invalid credentials."
 
     payload = {
