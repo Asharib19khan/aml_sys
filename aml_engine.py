@@ -189,7 +189,7 @@ def detect_smurfing(
     lower_bound: float = 8_000.0,
     min_deposits: int = 2,
 ) -> pd.DataFrame:
-    """Detect smurfing: multiple sub-$10K deposits with daily total >= $10K."""
+    """Detect suspicious transactions across deposit/withdrawal/transfer."""
     if df.empty:
         return _empty_frame(FLAGGED_COLUMNS)
 
@@ -199,19 +199,23 @@ def detect_smurfing(
     working_df = df.copy()
     working_df["transaction_time"] = pd.to_datetime(working_df["transaction_time"], errors="coerce")
 
-    deposits = working_df[
-        (working_df["transaction_type"] == "deposit")
-        & (working_df["amount"] < reporting_limit)
-        & (working_df["amount"] >= lower_bound)
-        & working_df["transaction_time"].notna()
+    transactions = working_df[
+        working_df["transaction_time"].notna()
+        & working_df["amount"].notna()
+        & working_df["transaction_type"].isin(["deposit", "withdrawal", "transfer"])
     ].copy()
 
-    if deposits.empty:
+    if transactions.empty:
         return _empty_frame(FLAGGED_COLUMNS)
 
-    deposits["txn_date"] = deposits["transaction_time"].dt.date
+    transactions["txn_date"] = transactions["transaction_time"].dt.date
 
-    grouped = deposits.groupby(["account_id", "txn_date"], as_index=False).agg(
+    smurf_candidates = transactions[
+        (transactions["amount"] < reporting_limit)
+        & (transactions["amount"] >= lower_bound)
+    ].copy()
+
+    grouped = smurf_candidates.groupby(["account_id", "txn_date", "transaction_type"], as_index=False).agg(
         transaction_count=("amount", "size"),
         total_amount=("amount", "sum"),
         avg_amount=("amount", "mean"),
@@ -219,16 +223,59 @@ def detect_smurfing(
         transaction_ids=("transaction_id", lambda x: "|".join(x)),
     )
 
-    flagged = grouped[
+    smurfing_flagged = grouped[
         (grouped["transaction_count"] >= min_deposits) & (grouped["total_amount"] >= reporting_limit)
     ].copy()
 
-    if flagged.empty:
+    if not smurfing_flagged.empty:
+        smurfing_flagged["avg_amount"] = smurfing_flagged["avg_amount"].round(2)
+        smurfing_flagged["total_amount"] = smurfing_flagged["total_amount"].round(2)
+        smurfing_flagged["reason"] = smurfing_flagged["transaction_type"].astype(str).apply(
+            lambda tx: (
+                f"Potential structuring: repeated sub-$10,000 {tx} transactions "
+                "with daily total >= $10,000"
+            )
+        )
+        smurfing_flagged = smurfing_flagged.drop(columns=["transaction_type"])
+
+    reportable_single = transactions[transactions["amount"] >= reporting_limit].copy()
+    if not reportable_single.empty:
+        reportable_single["transaction_count"] = 1
+        reportable_single["total_amount"] = reportable_single["amount"].round(2)
+        reportable_single["avg_amount"] = reportable_single["amount"].round(2)
+        reportable_single["first_transaction_time"] = reportable_single["transaction_time"]
+        reportable_single["transaction_ids"] = reportable_single["transaction_id"].astype(str)
+        reportable_single["reason"] = reportable_single["transaction_type"].astype(str).apply(
+            lambda tx: f"Reportable single {tx} >= $10,000"
+        )
+        reportable_single = reportable_single[
+            [
+                "account_id",
+                "txn_date",
+                "first_transaction_time",
+                "transaction_count",
+                "total_amount",
+                "avg_amount",
+                "transaction_ids",
+                "reason",
+            ]
+        ]
+
+    flagged_parts = []
+    if not smurfing_flagged.empty:
+        flagged_parts.append(smurfing_flagged)
+    if not reportable_single.empty:
+        flagged_parts.append(reportable_single)
+
+    if not flagged_parts:
         return _empty_frame(FLAGGED_COLUMNS)
 
-    flagged["avg_amount"] = flagged["avg_amount"].round(2)
-    flagged["total_amount"] = flagged["total_amount"].round(2)
-    flagged["reason"] = "Potential smurfing: repeated sub-$10,000 deposits with daily total >= $10,000"
+    flagged = pd.concat(flagged_parts, ignore_index=True)
+    flagged = flagged.drop_duplicates(
+        subset=["account_id", "txn_date", "transaction_ids", "reason"],
+        keep="last",
+    )
+
     flagged["audit_timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     return flagged[FLAGGED_COLUMNS].sort_values(["txn_date", "total_amount"], ascending=[True, False])
@@ -240,13 +287,14 @@ def detect_smurfing(
 
 
 def export_flagged(flagged_df: pd.DataFrame, filepath: str) -> bool:
-    """Export flagged accounts in append mode."""
+    """Export flagged accounts with deduplication across repeated audits."""
     try:
-        Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+        path = Path(filepath)
+        path.parent.mkdir(parents=True, exist_ok=True)
 
         if flagged_df.empty:
-            if not Path(filepath).exists():
-                pd.DataFrame(columns=FLAGGED_COLUMNS).to_csv(filepath, index=False)
+            if not path.exists():
+                pd.DataFrame(columns=FLAGGED_COLUMNS).to_csv(path, index=False)
             return True
 
         output = flagged_df.copy()
@@ -254,8 +302,36 @@ def export_flagged(flagged_df: pd.DataFrame, filepath: str) -> bool:
             if col not in output.columns:
                 output[col] = pd.NA
 
-        file_exists = Path(filepath).exists()
-        output[FLAGGED_COLUMNS].to_csv(filepath, mode="a", header=not file_exists, index=False)
+        existing = _empty_frame(FLAGGED_COLUMNS)
+        if path.exists() and path.stat().st_size > 0:
+            try:
+                existing = pd.read_csv(path, on_bad_lines="skip")
+            except Exception:
+                existing = _empty_frame(FLAGGED_COLUMNS)
+
+        for col in FLAGGED_COLUMNS:
+            if col not in existing.columns:
+                existing[col] = pd.NA
+
+        dedupe_keys = ["account_id", "txn_date", "transaction_ids", "reason"]
+
+        existing_norm = existing[FLAGGED_COLUMNS].copy()
+        output_norm = output[FLAGGED_COLUMNS].copy()
+
+        for frame in (existing_norm, output_norm):
+            frame["account_id"] = frame["account_id"].astype(str).str.strip().str.lower()
+            frame["txn_date"] = pd.to_datetime(frame["txn_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+            frame["txn_date"] = frame["txn_date"].fillna("")
+            frame["transaction_ids"] = frame["transaction_ids"].astype(str).str.strip()
+            frame["reason"] = frame["reason"].astype(str).str.strip()
+
+        combined = pd.concat([existing_norm, output_norm], ignore_index=True)
+        combined = combined.drop_duplicates(
+            subset=dedupe_keys,
+            keep="last",
+        )
+        combined = combined.sort_values(["txn_date", "total_amount"], ascending=[True, False])
+        combined.to_csv(path, index=False)
         return True
 
     except Exception as e:
@@ -263,8 +339,12 @@ def export_flagged(flagged_df: pd.DataFrame, filepath: str) -> bool:
         return False
 
 
-def generate_plot(df: pd.DataFrame, flagged_ids: set[str] | list[str]) -> Figure:
-    """Generate Matplotlib scatter plot: normal (green) vs flagged (red) transactions."""
+def generate_plot(
+    df: pd.DataFrame,
+    flagged_ids: set[str] | list[str],
+    reporting_limit: float = 10_000.0,
+) -> Figure:
+    """Generate AML plot with readable scaling and a reporting-threshold reference."""
     figure = Figure(figsize=(12, 6))
     ax = figure.add_subplot(1, 1, 1)
 
@@ -295,13 +375,6 @@ def generate_plot(df: pd.DataFrame, flagged_ids: set[str] | list[str]) -> Figure
             s=30,
             label="Normal",
         )
-        ax.plot(
-            normal_df["transaction_time"],
-            normal_df["amount"],
-            color="#2E8B57",
-            alpha=0.15,
-            linewidth=1.0,
-        )
 
     if not flagged_df.empty:
         ax.scatter(
@@ -312,19 +385,29 @@ def generate_plot(df: pd.DataFrame, flagged_ids: set[str] | list[str]) -> Figure
             s=40,
             label="Flagged",
         )
-        ax.plot(
-            flagged_df["transaction_time"],
-            flagged_df["amount"],
-            color="#C0392B",
-            alpha=0.35,
-            linewidth=1.2,
-        )
+
+    ax.axhline(
+        y=reporting_limit,
+        color="#34495E",
+        linestyle="--",
+        linewidth=1.0,
+        alpha=0.7,
+        label=f"Reporting limit (${reporting_limit:,.0f})",
+    )
+
+    min_amount = float(plot_df["amount"].min())
+    max_amount = float(plot_df["amount"].max())
+    if min_amount > 0 and (max_amount / min_amount) >= 100:
+        ax.set_yscale("log")
+        ax.set_ylabel("Amount (USD, log scale)")
+    else:
+        ax.set_ylabel("Amount (USD)")
 
     ax.set_title("Normal vs Flagged Transactions")
     ax.set_xlabel("Transaction Time")
-    ax.set_ylabel("Amount (USD)")
     ax.grid(True, linestyle="--", alpha=0.2)
     ax.legend(loc="best")
+    figure.autofmt_xdate(rotation=15)
     figure.tight_layout()
     return figure
 
@@ -396,13 +479,18 @@ def create_user(
     if user_role == "customer":
         user_role = "client"
     user_account = account_id.strip().lower()
+    user_password = password.strip()
 
     if not user:
         return False, "Username required."
-    if len(password) < 6:
-        return False, "Password min 6 chars."
     if user_role not in VALID_ROLES:
         return False, "Role must be admin or client."
+
+    if user_role == "admin" and len(user_password) < 6:
+        return False, "Admin password min 6 chars."
+    if user_role == "client" and len(user_password) != 4:
+        return False, "Customer bank code must be exactly 4 chars."
+
     if user_role == "client" and not user_account:
         return False, "Client requires account_id."
 
@@ -414,7 +502,7 @@ def create_user(
         [
             {
                 "username": user,
-                "password": password,
+                "password": user_password,
                 "role": user_role,
                 "account_id": user_account,
                 "is_active": bool(is_active),

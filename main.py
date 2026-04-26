@@ -146,13 +146,37 @@ def list_customers_flow() -> None:
     print(f"[OK] Total customers: {len(customers)}")
     print(f"[OK] Active customers: {active_count}")
 
-    print("\nCustomers:")
+    display_rows: list[dict[str, str]] = []
     for _, row in customers.iterrows():
-        status = "active" if bool(row["is_active"]) else "inactive"
-        print(
-            f"  unique_id={row['username']} | account_id={row['account_id']} | "
-            f"status={status} | created_at={row['created_at']}"
+        display_rows.append(
+            {
+                "UNIQUE_ID": str(row["username"]),
+                "ACCOUNT_ID": str(row["account_id"]),
+                "STATUS": "active" if bool(row["is_active"]) else "inactive",
+                "CREATED_AT": str(row["created_at"]),
+            }
         )
+
+    columns = ["UNIQUE_ID", "ACCOUNT_ID", "STATUS", "CREATED_AT"]
+    widths = {
+        col: max(len(col), max(len(r[col]) for r in display_rows))
+        for col in columns
+    }
+
+    def fmt_row(values: list[str]) -> str:
+        return "| " + " | ".join(
+            values[i].ljust(widths[columns[i]]) for i in range(len(columns))
+        ) + " |"
+
+    separator = "+-" + "-+-".join("-" * widths[col] for col in columns) + "-+"
+
+    print("\nCustomers:")
+    print(separator)
+    print(fmt_row(columns))
+    print(separator)
+    for row in display_rows:
+        print(fmt_row([row[col] for col in columns]))
+    print(separator)
 
 
 def main() -> None:
